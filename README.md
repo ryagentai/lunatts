@@ -16,6 +16,8 @@ It is designed for real-time AI agents (e.g., Hermes Agent, Telegram bots, local
 * **🔒 0 MB GPU VRAM Footprint**: Runs 100% on CPU, leaving your GPU VRAM completely free for local LLMs (e.g., Llama, Qwen).
 * **🔊 Pre-Baked Voice Profiles (.npz)**: Extract speaker embeddings and codebook tokens once into compact `.npz` files for instant zero-latency loading.
 * **📱 Native Telegram OGG Opus Support**: Exports 24kbps OGG Opus audio (`.ogg`), displaying natively as Telegram Voice Notes (round bubbles, ~14KB per clip, non-looping).
+* **✂️ Smart Silence Trimming (1.0s Pause)**: Built-in automated FFmpeg `silenceremove` filter that eliminates hallucinated trailing audio, long drags, and trailing silence, keeping a clean 1.0s natural pause.
+* **🎯 Smooth Voice Parameter Tuning**: Calibrated sampling parameters (`temperature=0.3`, `top_k=20`, `top_p=0.85`, `repetition_penalty=1.1`) ensuring silky smooth, non-choppy voice synthesis without cut-offs (up to 2048 tokens).
 * **💻 Built-in Glassmorphic Web UI**: Includes an interactive Web UI for online TTS testing, voice profile management, and one-click voice cloning.
 * **🔌 OpenAI-Compatible API**: Seamlessly integrates into any platform supporting OpenAI `/v1/audio/speech`.
 
@@ -68,7 +70,7 @@ curl -X POST http://127.0.0.1:8890/v1/audio/speech \
 ```
 
 ### `POST /v1/audio/clone` (Voice Cloning)
-Bake a reference audio file into a `.npz` voice profile.
+Bake a reference audio file into a `.npz` voice profile and archive original reference audio.
 
 ```bash
 curl -X POST http://127.0.0.1:8890/v1/audio/clone \
@@ -81,12 +83,23 @@ List all baked voice profiles and reference audio URLs.
 
 ---
 
+## 🛠️ Audio & Quality Specifications
+
+| Attribute | Specification |
+| :--- | :--- |
+| **Output Formats** | `.ogg` (Opus 24kbps) / `.mp3` (64kbps) / `.wav` |
+| **Silence Trimming** | Automated `-af silenceremove=stop_periods=-1:stop_duration=1.0:stop_threshold=-35dB` |
+| **Sampling Config** | `temperature=0.3`, `top_k=20`, `top_p=0.85`, `repetition_penalty=1.1` |
+| **Max Tokens** | Up to `2048` tokens (~2.8 mins of continuous speech) |
+
+---
+
 ## 📁 Project Directory Layout
 
 ```
 lunatts/
 ├── lunatts_server.py     # FastAPI Server & Glassmorphic Web UI
-├── clone_worker.py       # Q4_K_M Inference Engine
+├── clone_worker.py       # Q4_K_M Inference Engine & Silence Trimmer
 ├── bake_voice_clone.py   # Speaker Embedding & ASR Baker
 ├── start_server.py       # Background Service Manager
 ├── baked_voices/         # Pre-baked .npz Voice Profile Storage
