@@ -1,13 +1,14 @@
 #!/usr/bin/env python3
 """
-Luna-TTS Official Pre-Baked Voice Inference & Cloning Server (Qwen3-TTS 1.7B Base)
------------------------------------------------------------------------------------
-Runs a dedicated OpenAI-compatible API server + 9002 Cyberpunk Web UI listening on port 8890.
-100% local, offline Zero-Shot Voice Cloning using pre-baked .npz voice profiles.
+Luna-TTS Official Pre-Baked Voice Inference & Multi-Role Cloning Server (Qwen3-TTS 1.7B Base)
+---------------------------------------------------------------------------------------------
+Runs a dedicated OpenAI-compatible API server + 9002 PureVision Cyberpunk Web UI listening on port 8890.
+100% local, offline Zero-Shot Voice Cloning + Multi-Role Dialogue Synthesis using pre-baked .npz voice profiles.
 Uses non-blocking asyncio thread pools so Web UI and health checks never spin or freeze.
 """
 
 import os
+import re
 import sys
 import time
 import shutil
@@ -19,12 +20,12 @@ from fastapi import FastAPI, HTTPException, Request, Response, UploadFile, File,
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, FileResponse
 from pydantic import BaseModel
-from typing import Optional
+from typing import Optional, List, Tuple
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger("lunatts_server")
 
-app = FastAPI(title="Luna-TTS Local Voice Engine", version="1.2.0")
+app = FastAPI(title="Luna-TTS Local Voice Engine", version="1.3.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -51,6 +52,48 @@ class SpeechRequest(BaseModel):
     response_format: Optional[str] = "ogg"
     speed: Optional[float] = 1.0
 
+def parse_dialogue_script(text: str, default_voice: str) -> List[Tuple[str, str]]:
+    """
+    Parses multi-role dialogue script.
+    Formats supported:
+    1. [voice_name]: text
+    2. voice_name: text
+    3. [voice_name] text
+    """
+    baked_voices = set()
+    if os.path.exists(BAKED_VOICES_DIR):
+        baked_voices = {f.replace(".npz", "") for f in os.listdir(BAKED_VOICES_DIR) if f.endswith(".npz")}
+
+    lines = [l.strip() for l in text.split('\n') if l.strip()]
+    segments = []
+    
+    # Matches [role]: content or role: content or [role] content
+    pattern = re.compile(r'^(?:\[([a-zA-Z0-9_\u4e00-\u9fa5]+)\]|([a-zA-Z0-9_\u4e00-\u9fa5]+)[:：])\s*(.*)$')
+    
+    current_voice = default_voice
+    
+    for line in lines:
+        match = pattern.match(line)
+        if match:
+            v_name = match.group(1) or match.group(2)
+            content = match.group(3)
+            if v_name in baked_voices:
+                current_voice = v_name
+                if content and content.strip():
+                    segments.append((current_voice, content.strip()))
+                continue
+        segments.append((current_voice, line))
+        
+    # Merge consecutive lines with same voice
+    merged = []
+    for v, t in segments:
+        if merged and merged[-1][0] == v:
+            merged[-1] = (v, merged[-1][1] + " " + t)
+        else:
+            merged.append((v, t))
+            
+    return merged if merged else [(default_voice, text)]
+
 @app.get("/health")
 def health():
     baked_files = [f.replace(".npz", "") for f in os.listdir(BAKED_VOICES_DIR) if f.endswith(".npz")] if os.path.exists(BAKED_VOICES_DIR) else []
@@ -60,7 +103,8 @@ def health():
         "port": 8890,
         "engine_type": "Qwen3-TTS 1.7B Base Q4_K_M Zero-Shot Voice Clone",
         "baked_voices": baked_files,
-        "default_voice": "sample2"
+        "default_voice": "sample2",
+        "multi_role_dialogue_supported": True
     }
 
 @app.get("/v1/models")
@@ -107,48 +151,102 @@ def get_ref_audio(voice_name: str):
             return FileResponse(cand, media_type=mime)
     raise HTTPException(status_code=404, detail="Reference audio not found")
 
+async def _synthesize_single_segment(text: str, voice_name: str) -> str:
+    """Helper to synthesize one audio segment to temporary WAV file."""
+    temp_wav = f"/tmp/luna_seg_{time.time_ns()}_{os.urandom(4).hex()}.wav"
+    proc = await asyncio.to_thread(
+        subprocess.run,
+        [PYTHON_BIN, WORKER_SCRIPT, text, temp_wav, voice_name],
+        capture_output=True, text=True, timeout=120
+    )
+    if proc.returncode != 0 or not os.path.exists(temp_wav) or os.path.getsize(temp_wav) == 0:
+        if os.path.exists(temp_wav): os.remove(temp_wav)
+        raise RuntimeError(f"Segment synthesis failed for voice '{voice_name}': {proc.stderr}")
+    return temp_wav
+
 @app.post("/v1/audio/speech")
 async def generate_speech(req: SpeechRequest):
     if not req.input or not req.input.strip():
         raise HTTPException(status_code=400, detail="Input text cannot be empty")
 
-    voice_name = req.voice or "sample2"
+    default_voice = req.voice or "sample2"
     fmt = (req.response_format or "ogg").lower()
     ext = ".ogg" if fmt in {"ogg", "opus"} else ".mp3"
     media_type = "audio/ogg" if ext == ".ogg" else "audio/mpeg"
 
-    logger.info(f"Speech synthesis request: '{req.input[:30]}...' (voice={voice_name}, format={fmt})")
+    segments = parse_dialogue_script(req.input, default_voice)
+    logger.info(f"Speech request ({len(segments)} segment(s)): '{req.input[:40]}...' (default_voice={default_voice}, format={fmt})")
     start_t = time.perf_counter()
 
-    temp_audio = f"/tmp/luna_out_{time.time_ns()}{ext}"
+    temp_audio_out = f"/tmp/luna_out_{time.time_ns()}{ext}"
+    created_files = []
 
     try:
-        # Non-blocking async execution to keep Uvicorn event loop responsive
-        proc = await asyncio.to_thread(
-            subprocess.run,
-            [PYTHON_BIN, WORKER_SCRIPT, req.input, temp_audio, voice_name],
-            capture_output=True, text=True, timeout=120
-        )
-        if proc.returncode != 0:
-            logger.error(f"Worker process failed: {proc.stderr}")
-            raise RuntimeError(f"Voice clone worker error: {proc.stderr}")
+        if len(segments) == 1:
+            # Single voice fast-path
+            v_name, txt = segments[0]
+            proc = await asyncio.to_thread(
+                subprocess.run,
+                [PYTHON_BIN, WORKER_SCRIPT, txt, temp_audio_out, v_name],
+                capture_output=True, text=True, timeout=120
+            )
+            if proc.returncode != 0 or not os.path.exists(temp_audio_out):
+                raise RuntimeError(f"Worker process failed: {proc.stderr}")
+        else:
+            # Multi-role dialogue synthesis & audio stitching
+            seg_wavs = []
+            for v_name, txt in segments:
+                wav_p = await _synthesize_single_segment(txt, v_name)
+                seg_wavs.append(wav_p)
+                created_files.append(wav_p)
 
-        if not os.path.exists(temp_audio) or os.path.getsize(temp_audio) == 0:
-            raise RuntimeError("Worker process failed to produce output audio file")
+            # Generate 0.35s turn silence WAV
+            silence_wav = f"/tmp/silence_{time.time_ns()}.wav"
+            created_files.append(silence_wav)
+            await asyncio.to_thread(
+                subprocess.run,
+                ["ffmpeg", "-y", "-f", "lavfi", "-i", "anullsrc=r=24000:cl=mono", "-t", "0.35", silence_wav],
+                capture_output=True, check=True
+            )
 
-        with open(temp_audio, "rb") as f:
+            # Create ffmpeg concat list file
+            concat_list = f"/tmp/concat_{time.time_ns()}.txt"
+            created_files.append(concat_list)
+            with open(concat_list, "w") as f:
+                for idx, w_file in enumerate(seg_wavs):
+                    f.write(f"file '{w_file}'\n")
+                    if idx < len(seg_wavs) - 1:
+                        f.write(f"file '{silence_wav}'\n")
+
+            # Stitch all segments with ffmpeg
+            if ext == ".ogg":
+                ffmpeg_cmd = ["ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", concat_list, "-c:a", "libopus", "-b:a", "24k", "-ar", "48000", temp_audio_out]
+            else:
+                ffmpeg_cmd = ["ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", concat_list, "-f", "mp3", "-ac", "1", "-ar", "24000", "-b:a", "64k", temp_audio_out]
+
+            await asyncio.to_thread(
+                subprocess.run,
+                ffmpeg_cmd, capture_output=True, text=True, check=True
+            )
+
+        with open(temp_audio_out, "rb") as f:
             audio_bytes = f.read()
 
-        if os.path.exists(temp_audio):
-            os.remove(temp_audio)
+        if os.path.exists(temp_audio_out):
+            os.remove(temp_audio_out)
+
+        for tmp_f in created_files:
+            if os.path.exists(tmp_f):
+                os.remove(tmp_f)
 
         elapsed = time.perf_counter() - start_t
-        logger.info(f"Speech synthesis complete in {elapsed:.3f}s ({len(audio_bytes)} bytes)")
+        logger.info(f"Speech synthesis complete ({len(segments)} segments) in {elapsed:.3f}s ({len(audio_bytes)} bytes)")
         return Response(content=audio_bytes, media_type=media_type)
     except Exception as e:
         logger.error(f"Speech synthesis error: {e}")
-        if os.path.exists(temp_audio):
-            os.remove(temp_audio)
+        if os.path.exists(temp_audio_out): os.remove(temp_audio_out)
+        for tmp_f in created_files:
+            if os.path.exists(tmp_f): os.remove(tmp_f)
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/v1/audio/clone")
@@ -207,13 +305,13 @@ async def clone_voice(
             os.remove(tmp_upload)
         raise HTTPException(status_code=500, detail=str(e))
 
-# 9002 (UbuntuConsole) Fresh Cyberpunk Glassmorphic Design System
+# 9002 PureVision Cyberpunk Glassmorphic Design System
 HTML_CONTENT = """<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Luna-TTS 控制台 · 极速零样本语音克隆引擎</title>
+    <title>PureVision Luna-TTS · 极速多角色双音色零样本语音控制台</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@300;400;500;600;700&display=swap" rel="stylesheet">
@@ -389,12 +487,29 @@ HTML_CONTENT = """<!DOCTYPE html>
         .form-group { margin-bottom: 1.4rem; }
 
         .form-label {
-            display: block;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
             font-size: 0.85rem;
             font-weight: 600;
             color: var(--text-2);
             margin-bottom: 0.5rem;
             letter-spacing: 0.01em;
+        }
+
+        .preset-btn {
+            background: var(--bg-elev-2);
+            border: 1px solid var(--line-pink);
+            color: var(--pink-main);
+            padding: 3px 10px;
+            border-radius: var(--r-sm);
+            font-size: 0.76rem;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .preset-btn:hover {
+            background: var(--pink-soft);
         }
 
         .input-field, select, textarea {
@@ -414,7 +529,7 @@ HTML_CONTENT = """<!DOCTYPE html>
             box-shadow: 0 0 12px var(--pink-glow);
         }
 
-        textarea { height: 110px; resize: vertical; line-height: 1.6; }
+        textarea { height: 130px; resize: vertical; line-height: 1.6; font-family: inherit; }
 
         .dropzone {
             border: 2px dashed var(--line-strong);
@@ -514,8 +629,8 @@ HTML_CONTENT = """<!DOCTYPE html>
                         <span style="font-size:0.75rem; font-weight:700; color:#C9A96E; letter-spacing:0.15em; text-transform:uppercase;">PUREVISION</span>
                         <span style="font-size:0.7rem; color:var(--text-4); font-weight:300;">| www.pvsdesign.com</span>
                     </div>
-                    <h1>Luna-TTS 极速零样本语音控制台</h1>
-                    <p>Qwen3-TTS 1.7B Q4_K_M • 0 MB 显存占用 • 本地 CPU 极速引擎</p>
+                    <h1>Luna-TTS 极速双音色对话控制台</h1>
+                    <p>Qwen3-TTS 1.7B Q4_K_M • 支持单人/多角色对话广播剧 • 0 MB 显存</p>
                 </div>
             </div>
             <div class="status-pill">
@@ -525,7 +640,7 @@ HTML_CONTENT = """<!DOCTYPE html>
         </div>
 
         <div class="nav-tabs">
-            <button class="tab-btn active" onclick="switchTab('tts')">💬 文本合成试听</button>
+            <button class="tab-btn active" onclick="switchTab('tts')">💬 文本/多角色对话合成</button>
             <button class="tab-btn" onclick="switchTab('clone')">🔊 一键克隆声纹</button>
             <button class="tab-btn" onclick="switchTab('manage')">🗂️ 声纹库管理</button>
         </div>
@@ -533,19 +648,22 @@ HTML_CONTENT = """<!DOCTYPE html>
         <!-- TAB 1: TTS -->
         <div id="tab-tts" class="tab-panel active">
             <div class="form-group">
-                <label class="form-label">选择目标音色 (Voice Profile)</label>
+                <label class="form-label">默认音色 (单个角色时使用)</label>
                 <select id="tts-voice-select"></select>
             </div>
             <div class="form-group">
-                <label class="form-label">输入要合成的文本 (支持超长文本与智能 1.0s 句尾裁切)</label>
-                <textarea id="tts-input-text" placeholder="输入你需要合成的话...">您好，我是 Fina。我已经为您配置好了 9002 风格的 Cyber 极速语音引擎控制台。</textarea>
+                <div class="form-label">
+                    <span>输入文本 (支持多角色语法 `[角色名]: 文本`)</span>
+                    <button class="preset-btn" onclick="fillDialoguePreset()">🎭 载入双音色对话范例</button>
+                </div>
+                <textarea id="tts-input-text" placeholder="单人模式直接输入文字，或多角色模式格式：&#10;[sample2]: 主人，今天天气真好。&#10;[sample]: 是啊，我们去海边逛逛吧！">您好，我是 Fina。我已经为您配置好了支持双音色与多角色广播剧对话的 PureVision 极速控制台。</textarea>
             </div>
             <button class="cyber-btn" id="tts-submit-btn" onclick="generateSpeech()">
-                <span id="tts-btn-text">🚀 开始极速合成</span>
+                <span id="tts-btn-text">🚀 开始极速合成 (自动识别多角色)</span>
             </button>
 
             <div class="result-box" id="tts-player-box">
-                <label class="form-label">合成结果 (.ogg Opus 原生语音格式)</label>
+                <label class="form-label" style="margin-bottom:0.4rem;">合成结果 (.ogg Opus 原生语音格式)</label>
                 <audio id="tts-audio-player" controls></audio>
             </div>
         </div>
@@ -596,6 +714,14 @@ HTML_CONTENT = """<!DOCTYPE html>
             event.target.classList.add('active');
             document.getElementById('tab-' + tabId).classList.add('active');
             if (tabId === 'manage') loadVoices();
+        }
+
+        function fillDialoguePreset() {
+            const v1 = availableVoices.length > 0 ? availableVoices[0].name : 'sample2';
+            const v2 = availableVoices.length > 1 ? availableVoices[1].name : (v1 === 'sample2' ? 'sample' : 'sample2');
+            
+            const presetText = `[${v1}]: 主人，今天天气真好，我们去海边逛逛吧？\n[${v2}]: 好啊，这主意听起来不错，我现在去准备一下！\n[${v1}]: 太棒了，那我等你哦！`;
+            document.getElementById('tts-input-text').value = presetText;
         }
 
         function handleFileSelect(input) {
@@ -671,7 +797,7 @@ HTML_CONTENT = """<!DOCTYPE html>
             const btn = document.getElementById('tts-submit-btn');
             const btnText = document.getElementById('tts-btn-text');
             btn.disabled = true;
-            btnText.innerHTML = '<span class="spinner"></span> 正在 CPU 高速合成语音...';
+            btnText.innerHTML = '<span class="spinner"></span> 正在 CPU 高速合成多角色对话...';
 
             try {
                 const res = await fetch('/v1/audio/speech', {
@@ -695,7 +821,7 @@ HTML_CONTENT = """<!DOCTYPE html>
                 alert('语音合成错误: ' + err.message);
             } finally {
                 btn.disabled = false;
-                btnText.innerText = '🚀 开始极速合成';
+                btnText.innerText = '🚀 开始极速合成 (自动识别多角色)';
             }
         }
 
