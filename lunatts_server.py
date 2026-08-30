@@ -716,6 +716,7 @@ HTML_CONTENT = """<!DOCTYPE html>
 """
 
 @app.get("/", response_class=HTMLResponse)
+@app.head("/", response_class=HTMLResponse)
 def index_page():
     return HTML_CONTENT
 
