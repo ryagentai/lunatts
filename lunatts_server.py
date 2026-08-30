@@ -426,9 +426,10 @@ HTML_CONTENT = """<!DOCTYPE html>
             transition: all 0.2s;
         }
 
-        .dropzone:hover {
-            border-color: var(--blue-main);
-            background: var(--blue-soft);
+        .dropzone:hover, .dropzone.drag-active {
+            border-color: var(--pink-main);
+            background: var(--pink-soft);
+            box-shadow: 0 0 20px var(--pink-glow);
         }
 
         .cyber-btn {
@@ -557,7 +558,11 @@ HTML_CONTENT = """<!DOCTYPE html>
             </div>
             <div class="form-group">
                 <label class="form-label">上传参考人声音频 (MP3 / WAV / M4A / FLAC)</label>
-                <div class="dropzone" onclick="document.getElementById('clone-file-input').click()">
+                <div class="dropzone" id="dropzone-box"
+                     onclick="document.getElementById('clone-file-input').click()"
+                     ondragover="handleDragOver(event)"
+                     ondragleave="handleDragLeave(event)"
+                     ondrop="handleDrop(event)">
                     <span id="dropzone-label">📁 点击或拖入 5~15 秒清晰人声文件</span>
                     <input type="file" id="clone-file-input" accept="audio/*" style="display:none;" onchange="handleFileSelect(this)">
                 </div>
@@ -596,6 +601,33 @@ HTML_CONTENT = """<!DOCTYPE html>
         function handleFileSelect(input) {
             if (input.files && input.files[0]) {
                 document.getElementById('dropzone-label').innerText = '✅ 已选择: ' + input.files[0].name;
+            }
+        }
+
+        function handleDragOver(e) {
+            e.preventDefault();
+            e.stopPropagation();
+            document.getElementById('dropzone-box').classList.add('drag-active');
+        }
+
+        function handleDragLeave(e) {
+            e.preventDefault();
+            e.stopPropagation();
+            document.getElementById('dropzone-box').classList.remove('drag-active');
+        }
+
+        function handleDrop(e) {
+            e.preventDefault();
+            e.stopPropagation();
+            const box = document.getElementById('dropzone-box');
+            box.classList.remove('drag-active');
+            
+            const dt = e.dataTransfer;
+            const files = dt ? dt.files : null;
+            if (files && files.length > 0) {
+                const fileInput = document.getElementById('clone-file-input');
+                fileInput.files = files;
+                handleFileSelect(fileInput);
             }
         }
 
