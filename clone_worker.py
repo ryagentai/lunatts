@@ -28,6 +28,8 @@ def main():
     text = sys.argv[1]
     out_mp3_path = sys.argv[2]
     voice_name = sys.argv[3] if len(sys.argv) > 3 and sys.argv[3] else DEFAULT_VOICE
+    temperature = float(sys.argv[4]) if len(sys.argv) > 4 and sys.argv[4] else 0.75
+    speed = float(sys.argv[5]) if len(sys.argv) > 5 and sys.argv[5] else 1.0
 
     # Check for baked voice NPZ file
     npz_path = os.path.join(BAKED_VOICES_DIR, f"{voice_name}.npz")
@@ -58,7 +60,7 @@ def main():
         ref_codes=ref_codes,
         ref_text=ref_text,
         max_new_tokens=max_tokens,
-        temperature=0.3,
+        temperature=temperature,
         top_k=20,
         top_p=0.85,
         repetition_penalty=1.1,

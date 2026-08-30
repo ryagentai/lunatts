@@ -1,15 +1,15 @@
 #!/usr/bin/env python3
 """
-Luna-TTS Official Pre-Baked Voice Inference & Multi-Role Cloning Server (Qwen3-TTS 1.7B Base)
+PureVision Luna-TTS Official Channel Mapping & Emotion Control Server (Qwen3-TTS 1.7B Base)
 ---------------------------------------------------------------------------------------------
-Runs a dedicated OpenAI-compatible API server + 9002 PureVision Cyberpunk Web UI listening on port 8890.
-100% local, offline Zero-Shot Voice Cloning + Multi-Role Dialogue Synthesis using pre-baked .npz voice profiles.
-Uses non-blocking asyncio thread pools so Web UI and health checks never spin or freeze.
+Runs a dedicated OpenAI-compatible API server + PureVision Cyberpunk Web UI listening on port 8890.
+Supports 100% local Zero-Shot Voice Cloning, Multi-Role Dialogue, and Channel Voice/Emotion Mapping Matrix.
 """
 
 import os
 import re
 import sys
+import json
 import time
 import shutil
 import logging
@@ -20,12 +20,12 @@ from fastapi import FastAPI, HTTPException, Request, Response, UploadFile, File,
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, FileResponse
 from pydantic import BaseModel
-from typing import Optional, List, Tuple
+from typing import Optional, List, Tuple, Dict, Any
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger("lunatts_server")
 
-app = FastAPI(title="Luna-TTS Local Voice Engine", version="1.3.0")
+app = FastAPI(title="PureVision Luna-TTS Engine", version="1.4.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -40,26 +40,52 @@ WORKER_SCRIPT = "/media/ryan/UbuntuDATA/AI_PROJECTS/lunatts/clone_worker.py"
 BAKER_SCRIPT = "/media/ryan/UbuntuDATA/AI_PROJECTS/lunatts/bake_voice_clone.py"
 BAKED_VOICES_DIR = "/media/ryan/UbuntuDATA/AI_PROJECTS/lunatts/baked_voices"
 REF_AUDIO_DIR = "/media/ryan/UbuntuDATA/AI_PROJECTS/lunatts/ref_audio"
+CONFIG_FILE = "/media/ryan/UbuntuDATA/AI_PROJECTS/lunatts/config.json"
 
 os.makedirs(BAKED_VOICES_DIR, exist_ok=True)
 os.makedirs(REF_AUDIO_DIR, exist_ok=True)
 
+DEFAULT_CONFIG = {
+    "channels": {
+        "default": {"voice": "sample2", "temperature": 0.75, "speed": 1.0},
+        "telegram": {"voice": "sample2", "temperature": 0.75, "speed": 1.0},
+        "hermes": {"voice": "sample2", "temperature": 0.75, "speed": 1.0},
+        "webui": {"voice": "sample2", "temperature": 0.75, "speed": 1.0}
+    },
+    "global_settings": {
+        "default_voice": "sample2",
+        "default_temperature": 0.75,
+        "default_speed": 1.0
+    }
+}
+
+def load_config() -> Dict[str, Any]:
+    if os.path.exists(CONFIG_FILE):
+        try:
+            with open(CONFIG_FILE, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception as e:
+            logger.error(f"Error loading config.json: {e}")
+    return DEFAULT_CONFIG
+
+def save_config(cfg: Dict[str, Any]):
+    try:
+        with open(CONFIG_FILE, "w", encoding="utf-8") as f:
+            json.dump(cfg, f, indent=2, ensure_ascii=False)
+    except Exception as e:
+        logger.error(f"Error saving config.json: {e}")
+
 class SpeechRequest(BaseModel):
     model: Optional[str] = "luna-tts"
     input: str
-    voice: Optional[str] = "sample2"
-    ref_audio: Optional[str] = None
+    voice: Optional[str] = None
+    channel: Optional[str] = None
+    client_id: Optional[str] = None
     response_format: Optional[str] = "ogg"
+    temperature: Optional[float] = None
     speed: Optional[float] = 1.0
 
 def parse_dialogue_script(text: str, default_voice: str) -> List[Tuple[str, str]]:
-    """
-    Parses multi-role dialogue script.
-    Formats supported:
-    1. [voice_name]: text
-    2. voice_name: text
-    3. [voice_name] text
-    """
     baked_voices = set()
     if os.path.exists(BAKED_VOICES_DIR):
         baked_voices = {f.replace(".npz", "") for f in os.listdir(BAKED_VOICES_DIR) if f.endswith(".npz")}
@@ -67,9 +93,7 @@ def parse_dialogue_script(text: str, default_voice: str) -> List[Tuple[str, str]
     lines = [l.strip() for l in text.split('\n') if l.strip()]
     segments = []
     
-    # Matches [role]: content or role: content or [role] content
     pattern = re.compile(r'^(?:\[([a-zA-Z0-9_\u4e00-\u9fa5]+)\]|([a-zA-Z0-9_\u4e00-\u9fa5]+)[:：])\s*(.*)$')
-    
     current_voice = default_voice
     
     for line in lines:
@@ -84,7 +108,6 @@ def parse_dialogue_script(text: str, default_voice: str) -> List[Tuple[str, str]
                 continue
         segments.append((current_voice, line))
         
-    # Merge consecutive lines with same voice
     merged = []
     for v, t in segments:
         if merged and merged[-1][0] == v:
@@ -96,24 +119,34 @@ def parse_dialogue_script(text: str, default_voice: str) -> List[Tuple[str, str]
 
 @app.get("/health")
 def health():
+    cfg = load_config()
     baked_files = [f.replace(".npz", "") for f in os.listdir(BAKED_VOICES_DIR) if f.endswith(".npz")] if os.path.exists(BAKED_VOICES_DIR) else []
     return {
         "status": "ok",
-        "service": "Luna-TTS Local Engine",
+        "service": "PureVision Luna-TTS Engine",
         "port": 8890,
         "engine_type": "Qwen3-TTS 1.7B Base Q4_K_M Zero-Shot Voice Clone",
         "baked_voices": baked_files,
-        "default_voice": "sample2",
+        "channel_mappings": cfg.get("channels", {}),
         "multi_role_dialogue_supported": True
     }
+
+@app.get("/v1/config")
+def get_config_api():
+    return load_config()
+
+@app.post("/v1/config")
+def update_config_api(cfg: Dict[str, Any]):
+    save_config(cfg)
+    return {"status": "success", "config": cfg}
 
 @app.get("/v1/models")
 def list_models():
     return {
         "object": "list",
         "data": [
-            {"id": "luna-tts", "object": "model", "owned_by": "vui-labs/qwen3-tts"},
-            {"id": "qwen3-tts-1.7b-base", "object": "model", "owned_by": "vui-labs/qwen3-tts"}
+            {"id": "luna-tts", "object": "model", "owned_by": "purevision/qwen3-tts"},
+            {"id": "qwen3-tts-1.7b-base", "object": "model", "owned_by": "purevision/qwen3-tts"}
         ]
     }
 
@@ -151,12 +184,11 @@ def get_ref_audio(voice_name: str):
             return FileResponse(cand, media_type=mime)
     raise HTTPException(status_code=404, detail="Reference audio not found")
 
-async def _synthesize_single_segment(text: str, voice_name: str) -> str:
-    """Helper to synthesize one audio segment to temporary WAV file."""
+async def _synthesize_single_segment(text: str, voice_name: str, temperature: float = 0.75, speed: float = 1.0) -> str:
     temp_wav = f"/tmp/luna_seg_{time.time_ns()}_{os.urandom(4).hex()}.wav"
     proc = await asyncio.to_thread(
         subprocess.run,
-        [PYTHON_BIN, WORKER_SCRIPT, text, temp_wav, voice_name],
+        [PYTHON_BIN, WORKER_SCRIPT, text, temp_wav, voice_name, str(temperature), str(speed)],
         capture_output=True, text=True, timeout=120
     )
     if proc.returncode != 0 or not os.path.exists(temp_wav) or os.path.getsize(temp_wav) == 0:
@@ -165,17 +197,29 @@ async def _synthesize_single_segment(text: str, voice_name: str) -> str:
     return temp_wav
 
 @app.post("/v1/audio/speech")
-async def generate_speech(req: SpeechRequest):
+async def generate_speech(req: SpeechRequest, request: Request):
     if not req.input or not req.input.strip():
         raise HTTPException(status_code=400, detail="Input text cannot be empty")
 
-    default_voice = req.voice or "sample2"
+    cfg = load_config()
+    channels_cfg = cfg.get("channels", {})
+    
+    # Resolve channel/client ID
+    channel_key = req.channel or req.client_id or request.headers.get("X-Channel") or request.headers.get("X-Client-ID") or "default"
+    channel_key = channel_key.lower()
+    
+    chan_setting = channels_cfg.get(channel_key, channels_cfg.get("default", {"voice": "sample2", "temperature": 0.75, "speed": 1.0}))
+    
+    resolved_voice = req.voice or chan_setting.get("voice") or "sample2"
+    resolved_temp = req.temperature if req.temperature is not None else chan_setting.get("temperature", 0.75)
+    resolved_speed = req.speed if req.speed is not None else chan_setting.get("speed", 1.0)
+
     fmt = (req.response_format or "ogg").lower()
     ext = ".ogg" if fmt in {"ogg", "opus"} else ".mp3"
     media_type = "audio/ogg" if ext == ".ogg" else "audio/mpeg"
 
-    segments = parse_dialogue_script(req.input, default_voice)
-    logger.info(f"Speech request ({len(segments)} segment(s)): '{req.input[:40]}...' (default_voice={default_voice}, format={fmt})")
+    segments = parse_dialogue_script(req.input, resolved_voice)
+    logger.info(f"Speech request ({len(segments)} seg): '{req.input[:35]}...' (chan='{channel_key}', voice='{resolved_voice}', temp={resolved_temp})")
     start_t = time.perf_counter()
 
     temp_audio_out = f"/tmp/luna_out_{time.time_ns()}{ext}"
@@ -187,7 +231,7 @@ async def generate_speech(req: SpeechRequest):
             v_name, txt = segments[0]
             proc = await asyncio.to_thread(
                 subprocess.run,
-                [PYTHON_BIN, WORKER_SCRIPT, txt, temp_audio_out, v_name],
+                [PYTHON_BIN, WORKER_SCRIPT, txt, temp_audio_out, v_name, str(resolved_temp), str(resolved_speed)],
                 capture_output=True, text=True, timeout=120
             )
             if proc.returncode != 0 or not os.path.exists(temp_audio_out):
@@ -196,11 +240,10 @@ async def generate_speech(req: SpeechRequest):
             # Multi-role dialogue synthesis & audio stitching
             seg_wavs = []
             for v_name, txt in segments:
-                wav_p = await _synthesize_single_segment(txt, v_name)
+                wav_p = await _synthesize_single_segment(txt, v_name, resolved_temp, resolved_speed)
                 seg_wavs.append(wav_p)
                 created_files.append(wav_p)
 
-            # Generate 0.35s turn silence WAV
             silence_wav = f"/tmp/silence_{time.time_ns()}.wav"
             created_files.append(silence_wav)
             await asyncio.to_thread(
@@ -209,7 +252,6 @@ async def generate_speech(req: SpeechRequest):
                 capture_output=True, check=True
             )
 
-            # Create ffmpeg concat list file
             concat_list = f"/tmp/concat_{time.time_ns()}.txt"
             created_files.append(concat_list)
             with open(concat_list, "w") as f:
@@ -218,7 +260,6 @@ async def generate_speech(req: SpeechRequest):
                     if idx < len(seg_wavs) - 1:
                         f.write(f"file '{silence_wav}'\n")
 
-            # Stitch all segments with ffmpeg
             if ext == ".ogg":
                 ffmpeg_cmd = ["ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", concat_list, "-c:a", "libopus", "-b:a", "24k", "-ar", "48000", temp_audio_out]
             else:
@@ -232,15 +273,12 @@ async def generate_speech(req: SpeechRequest):
         with open(temp_audio_out, "rb") as f:
             audio_bytes = f.read()
 
-        if os.path.exists(temp_audio_out):
-            os.remove(temp_audio_out)
-
+        if os.path.exists(temp_audio_out): os.remove(temp_audio_out)
         for tmp_f in created_files:
-            if os.path.exists(tmp_f):
-                os.remove(tmp_f)
+            if os.path.exists(tmp_f): os.remove(tmp_f)
 
         elapsed = time.perf_counter() - start_t
-        logger.info(f"Speech synthesis complete ({len(segments)} segments) in {elapsed:.3f}s ({len(audio_bytes)} bytes)")
+        logger.info(f"Speech synthesis complete ({len(segments)} segs) in {elapsed:.3f}s ({len(audio_bytes)} bytes)")
         return Response(content=audio_bytes, media_type=media_type)
     except Exception as e:
         logger.error(f"Speech synthesis error: {e}")
@@ -276,7 +314,6 @@ async def clone_voice(
         if ref_text and ref_text.strip():
             cmd.append(ref_text.strip())
 
-        # Non-blocking async execution
         proc = await asyncio.to_thread(
             subprocess.run,
             cmd, capture_output=True, text=True, timeout=180
@@ -301,8 +338,7 @@ async def clone_voice(
         }
     except Exception as e:
         logger.error(f"Voice cloning error: {e}")
-        if os.path.exists(tmp_upload):
-            os.remove(tmp_upload)
+        if os.path.exists(tmp_upload): os.remove(tmp_upload)
         raise HTTPException(status_code=500, detail=str(e))
 
 # 9002 PureVision Cyberpunk Glassmorphic Design System
@@ -311,7 +347,7 @@ HTML_CONTENT = """<!DOCTYPE html>
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>PureVision Luna-TTS · 极速多角色双音色零样本语音控制台</title>
+    <title>PureVision Luna-TTS · 渠道音色与情感控制台</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@300;400;500;600;700&display=swap" rel="stylesheet">
@@ -342,10 +378,6 @@ HTML_CONTENT = """<!DOCTYPE html>
             --text-4: #575e8a;
 
             --ok: #5cc47b;
-            --ok-soft: rgba(92, 196, 123, 0.12);
-            --warn: #ffb703;
-            --err: #ff4d6d;
-
             --r-sm: 6px;
             --r-md: 10px;
             --r-lg: 14px;
@@ -372,7 +404,7 @@ HTML_CONTENT = """<!DOCTYPE html>
 
         .app-card {
             width: 100%;
-            max-width: 920px;
+            max-width: 960px;
             background: var(--bg-surface);
             border: 1px solid var(--line-strong);
             border-radius: var(--r-xl);
@@ -456,9 +488,9 @@ HTML_CONTENT = """<!DOCTYPE html>
             background: none;
             border: none;
             color: var(--text-3);
-            font-size: 0.92rem;
+            font-size: 0.9rem;
             font-weight: 600;
-            padding: 10px 16px;
+            padding: 10px 14px;
             border-radius: var(--r-md);
             cursor: pointer;
             transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
@@ -494,7 +526,6 @@ HTML_CONTENT = """<!DOCTYPE html>
             font-weight: 600;
             color: var(--text-2);
             margin-bottom: 0.5rem;
-            letter-spacing: 0.01em;
         }
 
         .preset-btn {
@@ -508,9 +539,7 @@ HTML_CONTENT = """<!DOCTYPE html>
             transition: all 0.2s;
         }
 
-        .preset-btn:hover {
-            background: var(--pink-soft);
-        }
+        .preset-btn:hover { background: var(--pink-soft); }
 
         .input-field, select, textarea {
             width: 100%;
@@ -575,6 +604,48 @@ HTML_CONTENT = """<!DOCTYPE html>
 
         audio { width: 100%; margin-top: 0.6rem; border-radius: 8px; }
 
+        .matrix-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+            gap: 1.2rem;
+            margin-bottom: 1.5rem;
+        }
+
+        .matrix-card {
+            background: var(--bg-elev-1);
+            border: 1px solid var(--line-strong);
+            border-radius: var(--r-lg);
+            padding: 1.2rem;
+        }
+
+        .matrix-card-title {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            color: var(--pink-main);
+            font-size: 1rem;
+            font-weight: 700;
+            margin-bottom: 1rem;
+            padding-bottom: 0.5rem;
+            border-bottom: 1px solid var(--line);
+        }
+
+        .slider-box {
+            margin-top: 0.8rem;
+        }
+
+        .slider-val {
+            font-size: 0.8rem;
+            color: var(--blue-main);
+            font-weight: 700;
+        }
+
+        input[type=range] {
+            width: 100%;
+            accent-color: var(--pink-main);
+            cursor: pointer;
+        }
+
         .voice-grid {
             display: grid;
             grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
@@ -629,8 +700,8 @@ HTML_CONTENT = """<!DOCTYPE html>
                         <span style="font-size:0.75rem; font-weight:700; color:#C9A96E; letter-spacing:0.15em; text-transform:uppercase;">PUREVISION</span>
                         <span style="font-size:0.7rem; color:var(--text-4); font-weight:300;">| www.pvsdesign.com</span>
                     </div>
-                    <h1>Luna-TTS 极速双音色对话控制台</h1>
-                    <p>Qwen3-TTS 1.7B Q4_K_M • 支持单人/多角色对话广播剧 • 0 MB 显存</p>
+                    <h1>Luna-TTS 渠道音色与情感映射控制台</h1>
+                    <p>Qwen3-TTS 1.7B Q4_K_M • 支持渠道路由映射 • 可调情感丰富度与语速</p>
                 </div>
             </div>
             <div class="status-pill">
@@ -640,26 +711,109 @@ HTML_CONTENT = """<!DOCTYPE html>
         </div>
 
         <div class="nav-tabs">
-            <button class="tab-btn active" onclick="switchTab('tts')">💬 文本/多角色对话合成</button>
+            <button class="tab-btn active" onclick="switchTab('matrix')">🎛️ 渠道音色与情感映射控制台</button>
+            <button class="tab-btn" onclick="switchTab('tts')">💬 文本/多角色试听</button>
             <button class="tab-btn" onclick="switchTab('clone')">🔊 一键克隆声纹</button>
             <button class="tab-btn" onclick="switchTab('manage')">🗂️ 声纹库管理</button>
         </div>
 
+        <!-- TAB 0: MATRIX -->
+        <div id="tab-matrix" class="tab-panel active">
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom: 1.2rem;">
+                <div>
+                    <h3 style="font-size:1.15rem; color:var(--text-1);">渠道/客户端路由与情感配置矩阵</h3>
+                    <p style="font-size:0.82rem; color:var(--text-3);">为 Telegram、Hermes、Web 等不同客户端独立分配默认音色、情感温度与语速</p>
+                </div>
+                <button class="cyber-btn" style="max-width:180px; padding:10px;" onclick="saveConfigMatrix()">💾 锁定并保存映射</button>
+            </div>
+
+            <div class="matrix-grid">
+                <!-- Telegram / Hermes -->
+                <div class="matrix-card">
+                    <div class="matrix-card-title">📱 Telegram / Hermes 渠道</div>
+                    <div class="form-group">
+                        <label class="form-label">绑定音色 Profile</label>
+                        <select id="matrix-tg-voice" class="voice-dropdown"></select>
+                    </div>
+                    <div class="slider-box">
+                        <div class="form-label">
+                            <span>🎭 情感丰富度 (Temperature)</span>
+                            <span class="slider-val" id="tg-temp-val">0.75</span>
+                        </div>
+                        <input type="range" id="matrix-tg-temp" min="0.1" max="0.9" step="0.05" value="0.75" oninput="document.getElementById('tg-temp-val').innerText=this.value">
+                    </div>
+                    <div class="slider-box">
+                        <div class="form-label">
+                            <span>⏱️ 语速 (Speed)</span>
+                            <span class="slider-val" id="tg-speed-val">1.0x</span>
+                        </div>
+                        <input type="range" id="matrix-tg-speed" min="0.8" max="1.5" step="0.05" value="1.0" oninput="document.getElementById('tg-speed-val').innerText=this.value+'x'">
+                    </div>
+                </div>
+
+                <!-- WebUI Console -->
+                <div class="matrix-card">
+                    <div class="matrix-card-title">💻 WebUI 控制台渠道</div>
+                    <div class="form-group">
+                        <label class="form-label">绑定音色 Profile</label>
+                        <select id="matrix-web-voice" class="voice-dropdown"></select>
+                    </div>
+                    <div class="slider-box">
+                        <div class="form-label">
+                            <span>🎭 情感丰富度 (Temperature)</span>
+                            <span class="slider-val" id="web-temp-val">0.75</span>
+                        </div>
+                        <input type="range" id="matrix-web-temp" min="0.1" max="0.9" step="0.05" value="0.75" oninput="document.getElementById('web-temp-val').innerText=this.value">
+                    </div>
+                    <div class="slider-box">
+                        <div class="form-label">
+                            <span>⏱️ 语速 (Speed)</span>
+                            <span class="slider-val" id="web-speed-val">1.0x</span>
+                        </div>
+                        <input type="range" id="matrix-web-speed" min="0.8" max="1.5" step="0.05" value="1.0" oninput="document.getElementById('web-speed-val').innerText=this.value+'x'">
+                    </div>
+                </div>
+
+                <!-- Default Fallback -->
+                <div class="matrix-card">
+                    <div class="matrix-card-title">🌐 全局通用兜底 (Default)</div>
+                    <div class="form-group">
+                        <label class="form-label">绑定音色 Profile</label>
+                        <select id="matrix-def-voice" class="voice-dropdown"></select>
+                    </div>
+                    <div class="slider-box">
+                        <div class="form-label">
+                            <span>🎭 情感丰富度 (Temperature)</span>
+                            <span class="slider-val" id="def-temp-val">0.75</span>
+                        </div>
+                        <input type="range" id="matrix-def-temp" min="0.1" max="0.9" step="0.05" value="0.75" oninput="document.getElementById('def-temp-val').innerText=this.value">
+                    </div>
+                    <div class="slider-box">
+                        <div class="form-label">
+                            <span>⏱️ 语速 (Speed)</span>
+                            <span class="slider-val" id="def-speed-val">1.0x</span>
+                        </div>
+                        <input type="range" id="matrix-def-speed" min="0.8" max="1.5" step="0.05" value="1.0" oninput="document.getElementById('def-speed-val').innerText=this.value+'x'">
+                    </div>
+                </div>
+            </div>
+        </div>
+
         <!-- TAB 1: TTS -->
-        <div id="tab-tts" class="tab-panel active">
+        <div id="tab-tts" class="tab-panel">
             <div class="form-group">
-                <label class="form-label">默认音色 (单个角色时使用)</label>
-                <select id="tts-voice-select"></select>
+                <label class="form-label">试听音色选择 (指定本次发音)</label>
+                <select id="tts-voice-select" class="voice-dropdown"></select>
             </div>
             <div class="form-group">
                 <div class="form-label">
                     <span>输入文本 (支持多角色语法 `[角色名]: 文本`)</span>
                     <button class="preset-btn" onclick="fillDialoguePreset()">🎭 载入双音色对话范例</button>
                 </div>
-                <textarea id="tts-input-text" placeholder="单人模式直接输入文字，或多角色模式格式：&#10;[sample2]: 主人，今天天气真好。&#10;[sample]: 是啊，我们去海边逛逛吧！">您好，我是 Fina。我已经为您配置好了支持双音色与多角色广播剧对话的 PureVision 极速控制台。</textarea>
+                <textarea id="tts-input-text" placeholder="单人模式直接输入文字，或多角色模式格式：&#10;[sample2]: 主人，今天天气真好。&#10;[sample]: 是啊，我们去海边逛逛吧！">您好，我是 Fina。我已经为您配置好了支持渠道路由映射与情感起伏调控的 PureVision 极速控制台。</textarea>
             </div>
             <button class="cyber-btn" id="tts-submit-btn" onclick="generateSpeech()">
-                <span id="tts-btn-text">🚀 开始极速合成 (自动识别多角色)</span>
+                <span id="tts-btn-text">🚀 开始极速合成</span>
             </button>
 
             <div class="result-box" id="tts-player-box">
@@ -706,6 +860,7 @@ HTML_CONTENT = """<!DOCTYPE html>
 
     <script>
         let availableVoices = [];
+        let currentConfig = {};
 
         function switchTab(tabId) {
             document.querySelectorAll('.tab-btn').forEach(btn => btn.classList.remove('active'));
@@ -731,20 +886,17 @@ HTML_CONTENT = """<!DOCTYPE html>
         }
 
         function handleDragOver(e) {
-            e.preventDefault();
-            e.stopPropagation();
+            e.preventDefault(); e.stopPropagation();
             document.getElementById('dropzone-box').classList.add('drag-active');
         }
 
         function handleDragLeave(e) {
-            e.preventDefault();
-            e.stopPropagation();
+            e.preventDefault(); e.stopPropagation();
             document.getElementById('dropzone-box').classList.remove('drag-active');
         }
 
         function handleDrop(e) {
-            e.preventDefault();
-            e.stopPropagation();
+            e.preventDefault(); e.stopPropagation();
             const box = document.getElementById('dropzone-box');
             box.classList.remove('drag-active');
             
@@ -757,20 +909,105 @@ HTML_CONTENT = """<!DOCTYPE html>
             }
         }
 
+        async function loadConfig() {
+            try {
+                const res = await fetch('/v1/config');
+                currentConfig = await res.json();
+                
+                const chans = currentConfig.channels || {};
+                const tg = chans.telegram || chans.default || {};
+                const web = chans.webui || chans.default || {};
+                const def = chans.default || {};
+
+                if (document.getElementById('matrix-tg-voice')) {
+                    document.getElementById('matrix-tg-voice').value = tg.voice || 'sample2';
+                    document.getElementById('matrix-tg-temp').value = tg.temperature || 0.75;
+                    document.getElementById('tg-temp-val').innerText = tg.temperature || 0.75;
+                    document.getElementById('matrix-tg-speed').value = tg.speed || 1.0;
+                    document.getElementById('tg-speed-val').innerText = (tg.speed || 1.0) + 'x';
+
+                    document.getElementById('matrix-web-voice').value = web.voice || 'sample2';
+                    document.getElementById('matrix-web-temp').value = web.temperature || 0.75;
+                    document.getElementById('web-temp-val').innerText = web.temperature || 0.75;
+                    document.getElementById('matrix-web-speed').value = web.speed || 1.0;
+                    document.getElementById('web-speed-val').innerText = (web.speed || 1.0) + 'x';
+
+                    document.getElementById('matrix-def-voice').value = def.voice || 'sample2';
+                    document.getElementById('matrix-def-temp').value = def.temperature || 0.75;
+                    document.getElementById('def-temp-val').innerText = def.temperature || 0.75;
+                    document.getElementById('matrix-def-speed').value = def.speed || 1.0;
+                    document.getElementById('def-speed-val').innerText = (def.speed || 1.0) + 'x';
+                }
+            } catch (err) {
+                console.error('Failed to load config:', err);
+            }
+        }
+
+        async function saveConfigMatrix() {
+            const cfg = {
+                channels: {
+                    telegram: {
+                        voice: document.getElementById('matrix-tg-voice').value,
+                        temperature: parseFloat(document.getElementById('matrix-tg-temp').value),
+                        speed: parseFloat(document.getElementById('matrix-tg-speed').value)
+                    },
+                    hermes: {
+                        voice: document.getElementById('matrix-tg-voice').value,
+                        temperature: parseFloat(document.getElementById('matrix-tg-temp').value),
+                        speed: parseFloat(document.getElementById('matrix-tg-speed').value)
+                    },
+                    webui: {
+                        voice: document.getElementById('matrix-web-voice').value,
+                        temperature: parseFloat(document.getElementById('matrix-web-temp').value),
+                        speed: parseFloat(document.getElementById('matrix-web-speed').value)
+                    },
+                    default: {
+                        voice: document.getElementById('matrix-def-voice').value,
+                        temperature: parseFloat(document.getElementById('matrix-def-temp').value),
+                        speed: parseFloat(document.getElementById('matrix-def-speed').value)
+                    }
+                },
+                global_settings: {
+                    default_voice: document.getElementById('matrix-def-voice').value,
+                    default_temperature: parseFloat(document.getElementById('matrix-def-temp').value),
+                    default_speed: parseFloat(document.getElementById('matrix-def-speed').value)
+                }
+            };
+
+            try {
+                const res = await fetch('/v1/config', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(cfg)
+                });
+                const data = await res.json();
+                if (data.status === 'success') {
+                    alert('🎉 渠道音色与情感映射控制矩阵已锁定保存！');
+                }
+            } catch (err) {
+                alert('保存配置失败: ' + err.message);
+            }
+        }
+
         async function loadVoices() {
             try {
                 const res = await fetch('/v1/voices');
                 const data = await res.json();
                 availableVoices = data.voices || [];
                 
-                const select = document.getElementById('tts-voice-select');
-                select.innerHTML = '';
-                availableVoices.forEach(v => {
-                    const opt = document.createElement('option');
-                    opt.value = v.name;
-                    opt.innerText = v.name + (v.name === 'sample2' ? ' (Fina 专属音色)' : '');
-                    select.appendChild(opt);
+                document.querySelectorAll('.voice-dropdown').forEach(select => {
+                    const oldVal = select.value;
+                    select.innerHTML = '';
+                    availableVoices.forEach(v => {
+                        const opt = document.createElement('option');
+                        opt.value = v.name;
+                        opt.innerText = v.name + (v.name === 'sample2' ? ' (Fina 专属音色)' : '');
+                        select.appendChild(opt);
+                    });
+                    if (oldVal) select.value = oldVal;
                 });
+
+                await loadConfig();
 
                 const container = document.getElementById('voice-card-container');
                 container.innerHTML = '';
@@ -797,12 +1034,12 @@ HTML_CONTENT = """<!DOCTYPE html>
             const btn = document.getElementById('tts-submit-btn');
             const btnText = document.getElementById('tts-btn-text');
             btn.disabled = true;
-            btnText.innerHTML = '<span class="spinner"></span> 正在 CPU 高速合成多角色对话...';
+            btnText.innerHTML = '<span class="spinner"></span> 正在 CPU 高速合成语音...';
 
             try {
                 const res = await fetch('/v1/audio/speech', {
                     method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
+                    headers: { 'Content-Type': 'application/json', 'X-Channel': 'webui' },
                     body: JSON.stringify({ voice, input, response_format: 'ogg' })
                 });
 
@@ -821,7 +1058,7 @@ HTML_CONTENT = """<!DOCTYPE html>
                 alert('语音合成错误: ' + err.message);
             } finally {
                 btn.disabled = false;
-                btnText.innerText = '🚀 开始极速合成 (自动识别多角色)';
+                btnText.innerText = '🚀 开始极速合成';
             }
         }
 

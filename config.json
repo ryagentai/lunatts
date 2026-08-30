@@ -1,0 +1,31 @@
+{
+  "channels": {
+    "default": {
+      "voice": "sample2",
+      "temperature": 0.75,
+      "speed": 1.0
+    },
+    "telegram": {
+      "voice": "sample2",
+      "temperature": 0.75,
+      "speed": 1.0
+    },
+    "hermes": {
+      "voice": "sample2",
+      "temperature": 0.75,
+      "speed": 1.0
+    },
+    "webui": {
+      "voice": "sample2",
+      "temperature": 0.75,
+      "speed": 1.0
+    }
+  },
+  "global_settings": {
+    "default_voice": "sample2",
+    "default_temperature": 0.75,
+    "default_speed": 1.0,
+    "silence_trim_duration": 1.0,
+    "silence_trim_threshold": -35
+  }
+}

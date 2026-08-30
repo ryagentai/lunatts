@@ -15,11 +15,11 @@ It is designed for real-time AI agents (e.g., Hermes Agent, Telegram bots, local
 
 * **⚡ Ultra-Fast CPU Inference**: Driven by GGML `Q4_K_M` quantization (1.16 GB model), achieving ~3-10s voice generation on standard multi-core CPUs.
 * **🔒 0 MB GPU VRAM Footprint**: Runs 100% on CPU, leaving your GPU VRAM completely free for local LLMs (e.g., Llama, Qwen).
-* **🔊 Pre-Baked Voice Profiles (.npz)**: Extract speaker embeddings and codebook tokens once into compact `.npz` files for instant zero-latency loading.
+* **🎛️ Channel Voice & Emotion Mapping Matrix**: Visually map different API callers (e.g. `Telegram`, `Hermes`, `WebUI`, `default`) to specific voice profiles, emotional richness (`temperature=0.1~0.9`), and speech rate (`speed=0.8x~1.5x`) via `config.json` and the Web UI.
+* **🎭 Multi-Role Dialogue Synthesis**: Parse multi-speaker dialogue scripts (`[role_a]: text \n [role_b]: text`) and synthesize seamless podcast/audiobook audio clips with 0.35s turn-pause stitching.
 * **📱 Native Telegram OGG Opus Support**: Exports 24kbps OGG Opus audio (`.ogg`), displaying natively as Telegram Voice Notes (round bubbles, ~14KB per clip, non-looping).
 * **✂️ Smart Silence Trimming (1.0s Pause)**: Built-in automated FFmpeg `silenceremove` filter that eliminates hallucinated trailing audio, long drags, and trailing silence, keeping a clean 1.0s natural pause.
-* **🎯 Smooth Voice Parameter Tuning**: Calibrated sampling parameters (`temperature=0.3`, `top_k=20`, `top_p=0.85`, `repetition_penalty=1.1`) ensuring silky smooth, non-choppy voice synthesis without cut-offs (up to 2048 tokens).
-* **💻 Built-in Glassmorphic Web UI**: Includes an interactive Web UI for online TTS testing, voice profile management, and one-click voice cloning.
+* **💻 PureVision Glassmorphic Web UI**: Includes an interactive Web UI for channel mapping matrix control, online TTS/dialogue testing, voice profile management, and one-click voice cloning.
 * **🔌 OpenAI-Compatible API**: Seamlessly integrates into any platform supporting OpenAI `/v1/audio/speech`.
 
 ---
