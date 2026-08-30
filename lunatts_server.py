@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """
-PureVision Luna-TTS Official Channel Mapping & Emotion Control Server (Qwen3-TTS 1.7B Base)
+PureVision Luna-TTS Dynamic Channel Mapping & Emotion Control Server (Qwen3-TTS 1.7B Base)
 ---------------------------------------------------------------------------------------------
 Runs a dedicated OpenAI-compatible API server + PureVision Cyberpunk Web UI listening on port 8890.
-Supports 100% local Zero-Shot Voice Cloning, Multi-Role Dialogue, and Channel Voice/Emotion Mapping Matrix.
+Supports 100% local Zero-Shot Voice Cloning, Multi-Role Dialogue, and Dynamic Custom Channel Voice Matrix.
 """
 
 import os
@@ -25,7 +25,7 @@ from typing import Optional, List, Tuple, Dict, Any
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger("lunatts_server")
 
-app = FastAPI(title="PureVision Luna-TTS Engine", version="1.4.0")
+app = FastAPI(title="PureVision Luna-TTS Engine", version="1.5.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -378,6 +378,7 @@ HTML_CONTENT = """<!DOCTYPE html>
             --text-4: #575e8a;
 
             --ok: #5cc47b;
+            --err: #ff4d6d;
             --r-sm: 6px;
             --r-md: 10px;
             --r-lg: 14px;
@@ -532,9 +533,9 @@ HTML_CONTENT = """<!DOCTYPE html>
             background: var(--bg-elev-2);
             border: 1px solid var(--line-pink);
             color: var(--pink-main);
-            padding: 3px 10px;
+            padding: 4px 12px;
             border-radius: var(--r-sm);
-            font-size: 0.76rem;
+            font-size: 0.78rem;
             cursor: pointer;
             transition: all 0.2s;
         }
@@ -616,6 +617,16 @@ HTML_CONTENT = """<!DOCTYPE html>
             border: 1px solid var(--line-strong);
             border-radius: var(--r-lg);
             padding: 1.2rem;
+            position: relative;
+        }
+
+        .matrix-card-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 1rem;
+            padding-bottom: 0.5rem;
+            border-bottom: 1px solid var(--line);
         }
 
         .matrix-card-title {
@@ -625,10 +636,20 @@ HTML_CONTENT = """<!DOCTYPE html>
             color: var(--pink-main);
             font-size: 1rem;
             font-weight: 700;
-            margin-bottom: 1rem;
-            padding-bottom: 0.5rem;
-            border-bottom: 1px solid var(--line);
+            text-transform: capitalize;
         }
+
+        .delete-chan-btn {
+            background: rgba(255, 77, 109, 0.12);
+            border: 1px solid rgba(255, 77, 109, 0.3);
+            color: var(--err);
+            padding: 2px 8px;
+            border-radius: var(--r-sm);
+            font-size: 0.72rem;
+            cursor: pointer;
+        }
+
+        .delete-chan-btn:hover { background: rgba(255, 77, 109, 0.25); }
 
         .slider-box {
             margin-top: 0.8rem;
@@ -700,8 +721,8 @@ HTML_CONTENT = """<!DOCTYPE html>
                         <span style="font-size:0.75rem; font-weight:700; color:#C9A96E; letter-spacing:0.15em; text-transform:uppercase;">PUREVISION</span>
                         <span style="font-size:0.7rem; color:var(--text-4); font-weight:300;">| www.pvsdesign.com</span>
                     </div>
-                    <h1>Luna-TTS 渠道音色与情感映射控制台</h1>
-                    <p>Qwen3-TTS 1.7B Q4_K_M • 支持渠道路由映射 • 可调情感丰富度与语速</p>
+                    <h1>Luna-TTS 动态渠道与音色控制台</h1>
+                    <p>Qwen3-TTS 1.7B Q4_K_M • 支持自定义添加渠道 • 动态配置与情感调控</p>
                 </div>
             </div>
             <div class="status-pill">
@@ -722,81 +743,15 @@ HTML_CONTENT = """<!DOCTYPE html>
             <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom: 1.2rem;">
                 <div>
                     <h3 style="font-size:1.15rem; color:var(--text-1);">渠道/客户端路由与情感配置矩阵</h3>
-                    <p style="font-size:0.82rem; color:var(--text-3);">为 Telegram、Hermes、Web 等不同客户端独立分配默认音色、情感温度与语速</p>
+                    <p style="font-size:0.82rem; color:var(--text-3);">支持客户自由添加新渠道，为 Telegram、Hermes、Discord、自定义 App 独立配置音色与感情</p>
                 </div>
-                <button class="cyber-btn" style="max-width:180px; padding:10px;" onclick="saveConfigMatrix()">💾 锁定并保存映射</button>
-            </div>
-
-            <div class="matrix-grid">
-                <!-- Telegram / Hermes -->
-                <div class="matrix-card">
-                    <div class="matrix-card-title">📱 Telegram / Hermes 渠道</div>
-                    <div class="form-group">
-                        <label class="form-label">绑定音色 Profile</label>
-                        <select id="matrix-tg-voice" class="voice-dropdown"></select>
-                    </div>
-                    <div class="slider-box">
-                        <div class="form-label">
-                            <span>🎭 情感丰富度 (Temperature)</span>
-                            <span class="slider-val" id="tg-temp-val">0.75</span>
-                        </div>
-                        <input type="range" id="matrix-tg-temp" min="0.1" max="0.9" step="0.05" value="0.75" oninput="document.getElementById('tg-temp-val').innerText=this.value">
-                    </div>
-                    <div class="slider-box">
-                        <div class="form-label">
-                            <span>⏱️ 语速 (Speed)</span>
-                            <span class="slider-val" id="tg-speed-val">1.0x</span>
-                        </div>
-                        <input type="range" id="matrix-tg-speed" min="0.8" max="1.5" step="0.05" value="1.0" oninput="document.getElementById('tg-speed-val').innerText=this.value+'x'">
-                    </div>
-                </div>
-
-                <!-- WebUI Console -->
-                <div class="matrix-card">
-                    <div class="matrix-card-title">💻 WebUI 控制台渠道</div>
-                    <div class="form-group">
-                        <label class="form-label">绑定音色 Profile</label>
-                        <select id="matrix-web-voice" class="voice-dropdown"></select>
-                    </div>
-                    <div class="slider-box">
-                        <div class="form-label">
-                            <span>🎭 情感丰富度 (Temperature)</span>
-                            <span class="slider-val" id="web-temp-val">0.75</span>
-                        </div>
-                        <input type="range" id="matrix-web-temp" min="0.1" max="0.9" step="0.05" value="0.75" oninput="document.getElementById('web-temp-val').innerText=this.value">
-                    </div>
-                    <div class="slider-box">
-                        <div class="form-label">
-                            <span>⏱️ 语速 (Speed)</span>
-                            <span class="slider-val" id="web-speed-val">1.0x</span>
-                        </div>
-                        <input type="range" id="matrix-web-speed" min="0.8" max="1.5" step="0.05" value="1.0" oninput="document.getElementById('web-speed-val').innerText=this.value+'x'">
-                    </div>
-                </div>
-
-                <!-- Default Fallback -->
-                <div class="matrix-card">
-                    <div class="matrix-card-title">🌐 全局通用兜底 (Default)</div>
-                    <div class="form-group">
-                        <label class="form-label">绑定音色 Profile</label>
-                        <select id="matrix-def-voice" class="voice-dropdown"></select>
-                    </div>
-                    <div class="slider-box">
-                        <div class="form-label">
-                            <span>🎭 情感丰富度 (Temperature)</span>
-                            <span class="slider-val" id="def-temp-val">0.75</span>
-                        </div>
-                        <input type="range" id="matrix-def-temp" min="0.1" max="0.9" step="0.05" value="0.75" oninput="document.getElementById('def-temp-val').innerText=this.value">
-                    </div>
-                    <div class="slider-box">
-                        <div class="form-label">
-                            <span>⏱️ 语速 (Speed)</span>
-                            <span class="slider-val" id="def-speed-val">1.0x</span>
-                        </div>
-                        <input type="range" id="matrix-def-speed" min="0.8" max="1.5" step="0.05" value="1.0" oninput="document.getElementById('def-speed-val').innerText=this.value+'x'">
-                    </div>
+                <div style="display:flex; gap:10px;">
+                    <button class="preset-btn" style="padding:8px 14px; font-size:0.85rem;" onclick="addNewChannelPrompt()">➕ 添加新渠道</button>
+                    <button class="cyber-btn" style="max-width:180px; padding:10px 16px;" onclick="saveConfigMatrix()">💾 锁定并保存映射</button>
                 </div>
             </div>
+
+            <div class="matrix-grid" id="matrix-cards-container"></div>
         </div>
 
         <!-- TAB 1: TTS -->
@@ -810,7 +765,7 @@ HTML_CONTENT = """<!DOCTYPE html>
                     <span>输入文本 (支持多角色语法 `[角色名]: 文本`)</span>
                     <button class="preset-btn" onclick="fillDialoguePreset()">🎭 载入双音色对话范例</button>
                 </div>
-                <textarea id="tts-input-text" placeholder="单人模式直接输入文字，或多角色模式格式：&#10;[sample2]: 主人，今天天气真好。&#10;[sample]: 是啊，我们去海边逛逛吧！">您好，我是 Fina。我已经为您配置好了支持渠道路由映射与情感起伏调控的 PureVision 极速控制台。</textarea>
+                <textarea id="tts-input-text" placeholder="单人模式直接输入文字，或多角色模式格式：&#10;[sample2]: 主人，今天天气真好。&#10;[sample]: 是啊，我们去海边逛逛吧！">您好，我是 Fina。我已经为您配置好了支持自由添加新渠道与独立配置音色的 PureVision 极速控制台。</textarea>
             </div>
             <button class="cyber-btn" id="tts-submit-btn" onclick="generateSpeech()">
                 <span id="tts-btn-text">🚀 开始极速合成</span>
@@ -913,64 +868,113 @@ HTML_CONTENT = """<!DOCTYPE html>
             try {
                 const res = await fetch('/v1/config');
                 currentConfig = await res.json();
-                
-                const chans = currentConfig.channels || {};
-                const tg = chans.telegram || chans.default || {};
-                const web = chans.webui || chans.default || {};
-                const def = chans.default || {};
-
-                if (document.getElementById('matrix-tg-voice')) {
-                    document.getElementById('matrix-tg-voice').value = tg.voice || 'sample2';
-                    document.getElementById('matrix-tg-temp').value = tg.temperature || 0.75;
-                    document.getElementById('tg-temp-val').innerText = tg.temperature || 0.75;
-                    document.getElementById('matrix-tg-speed').value = tg.speed || 1.0;
-                    document.getElementById('tg-speed-val').innerText = (tg.speed || 1.0) + 'x';
-
-                    document.getElementById('matrix-web-voice').value = web.voice || 'sample2';
-                    document.getElementById('matrix-web-temp').value = web.temperature || 0.75;
-                    document.getElementById('web-temp-val').innerText = web.temperature || 0.75;
-                    document.getElementById('matrix-web-speed').value = web.speed || 1.0;
-                    document.getElementById('web-speed-val').innerText = (web.speed || 1.0) + 'x';
-
-                    document.getElementById('matrix-def-voice').value = def.voice || 'sample2';
-                    document.getElementById('matrix-def-temp').value = def.temperature || 0.75;
-                    document.getElementById('def-temp-val').innerText = def.temperature || 0.75;
-                    document.getElementById('matrix-def-speed').value = def.speed || 1.0;
-                    document.getElementById('def-speed-val').innerText = (def.speed || 1.0) + 'x';
-                }
+                renderMatrixCards();
             } catch (err) {
                 console.error('Failed to load config:', err);
             }
         }
 
+        function renderMatrixCards() {
+            const container = document.getElementById('matrix-cards-container');
+            if (!container) return;
+            container.innerHTML = '';
+
+            const channels = currentConfig.channels || {};
+            const systemChans = ['default', 'telegram', 'hermes', 'webui'];
+
+            Object.keys(channels).forEach(cKey => {
+                const setting = channels[cKey] || {};
+                const card = document.createElement('div');
+                card.className = 'matrix-card';
+
+                const isSystem = systemChans.includes(cKey);
+                const titleText = cKey === 'default' ? '🌐 全局通用兜底 (Default)' : 
+                                 (cKey === 'telegram' ? '📱 Telegram / Hermes 渠道' : 
+                                 (cKey === 'webui' ? '💻 WebUI 控制台渠道' : `🔌 ${cKey} 渠道`));
+
+                let optionsHtml = '';
+                availableVoices.forEach(v => {
+                    const sel = (v.name === setting.voice) ? 'selected' : '';
+                    optionsHtml += `<option value="${v.name}" ${sel}>${v.name}${v.name === 'sample2' ? ' (Fina 专属音色)' : ''}</option>`;
+                });
+
+                card.innerHTML = `
+                    <div class="matrix-card-header">
+                        <div class="matrix-card-title">${titleText}</div>
+                        ${!isSystem ? `<button class="delete-chan-btn" onclick="deleteChannel('${cKey}')">🗑️ 删除</button>` : ''}
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">绑定音色 Profile</label>
+                        <select id="chan-voice-${cKey}" class="chan-voice-select">${optionsHtml}</select>
+                    </div>
+                    <div class="slider-box">
+                        <div class="form-label">
+                            <span>🎭 情感丰富度 (Temperature)</span>
+                            <span class="slider-val" id="chan-temp-val-${cKey}">${setting.temperature || 0.75}</span>
+                        </div>
+                        <input type="range" id="chan-temp-${cKey}" min="0.1" max="0.9" step="0.05" value="${setting.temperature || 0.75}" oninput="document.getElementById('chan-temp-val-${cKey}').innerText=this.value">
+                    </div>
+                    <div class="slider-box">
+                        <div class="form-label">
+                            <span>⏱️ 语速 (Speed)</span>
+                            <span class="slider-val" id="chan-speed-val-${cKey}">${setting.speed || 1.0}x</span>
+                        </div>
+                        <input type="range" id="chan-speed-${cKey}" min="0.8" max="1.5" step="0.05" value="${setting.speed || 1.0}" oninput="document.getElementById('chan-speed-val-${cKey}').innerText=this.value+'x'">
+                    </div>
+                `;
+                container.appendChild(card);
+            });
+        }
+
+        function addNewChannelPrompt() {
+            const name = prompt('请输入新渠道/客户端标识名称 (如 discord, bookstudio, game_bot):');
+            if (!name) return;
+            const cleanName = name.trim().toLowerCase().replace(/[^a-z0-9_]/g, '_');
+            if (!cleanName) return alert('渠道名称无效！');
+
+            if (!currentConfig.channels) currentConfig.channels = {};
+            if (currentConfig.channels[cleanName]) return alert('该渠道已存在！');
+
+            const defVoice = availableVoices.length > 0 ? availableVoices[0].name : 'sample2';
+            currentConfig.channels[cleanName] = {
+                voice: defVoice,
+                temperature: 0.75,
+                speed: 1.0
+            };
+            renderMatrixCards();
+        }
+
+        function deleteChannel(cKey) {
+            if (confirm(`确定要删除渠道 '${cKey}' 吗？`)) {
+                delete currentConfig.channels[cKey];
+                renderMatrixCards();
+            }
+        }
+
         async function saveConfigMatrix() {
+            const channels = {};
+            const container = document.getElementById('matrix-cards-container');
+            const cardElements = container.querySelectorAll('.matrix-card');
+
+            Object.keys(currentConfig.channels || {}).forEach(cKey => {
+                const vEl = document.getElementById(`chan-voice-${cKey}`);
+                const tEl = document.getElementById(`chan-temp-${cKey}`);
+                const sEl = document.getElementById(`chan-speed-${cKey}`);
+                if (vEl && tEl && sEl) {
+                    channels[cKey] = {
+                        voice: vEl.value,
+                        temperature: parseFloat(tEl.value),
+                        speed: parseFloat(sEl.value)
+                    };
+                }
+            });
+
             const cfg = {
-                channels: {
-                    telegram: {
-                        voice: document.getElementById('matrix-tg-voice').value,
-                        temperature: parseFloat(document.getElementById('matrix-tg-temp').value),
-                        speed: parseFloat(document.getElementById('matrix-tg-speed').value)
-                    },
-                    hermes: {
-                        voice: document.getElementById('matrix-tg-voice').value,
-                        temperature: parseFloat(document.getElementById('matrix-tg-temp').value),
-                        speed: parseFloat(document.getElementById('matrix-tg-speed').value)
-                    },
-                    webui: {
-                        voice: document.getElementById('matrix-web-voice').value,
-                        temperature: parseFloat(document.getElementById('matrix-web-temp').value),
-                        speed: parseFloat(document.getElementById('matrix-web-speed').value)
-                    },
-                    default: {
-                        voice: document.getElementById('matrix-def-voice').value,
-                        temperature: parseFloat(document.getElementById('matrix-def-temp').value),
-                        speed: parseFloat(document.getElementById('matrix-def-speed').value)
-                    }
-                },
+                channels: channels,
                 global_settings: {
-                    default_voice: document.getElementById('matrix-def-voice').value,
-                    default_temperature: parseFloat(document.getElementById('matrix-def-temp').value),
-                    default_speed: parseFloat(document.getElementById('matrix-def-speed').value)
+                    default_voice: channels.default ? channels.default.voice : 'sample2',
+                    default_temperature: channels.default ? channels.default.temperature : 0.75,
+                    default_speed: channels.default ? channels.default.speed : 1.0
                 }
             };
 
@@ -982,7 +986,8 @@ HTML_CONTENT = """<!DOCTYPE html>
                 });
                 const data = await res.json();
                 if (data.status === 'success') {
-                    alert('🎉 渠道音色与情感映射控制矩阵已锁定保存！');
+                    currentConfig = cfg;
+                    alert('🎉 渠道映射与配置矩阵已成功锁存写入 config.json！');
                 }
             } catch (err) {
                 alert('保存配置失败: ' + err.message);
