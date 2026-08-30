@@ -1,10 +1,11 @@
-# 🎙️ Luna-TTS: High-Performance Local Zero-Shot Voice Cloning Engine
+# 🎙️ PureVision Luna-TTS: High-Performance Local Zero-Shot Voice Cloning Engine
 
+[![PureVision](https://img.shields.io/badge/Brand-PureVision-C9A96E.svg)](https://www.pvsdesign.com)
 [![Python 3.10+](https://img.shields.io/badge/Python-3.10%2B-blue.svg)](https://www.python.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.100%2B-green.svg)](https://fastapi.tiangolo.com/)
 
-**Luna-TTS** is a lightweight, 100% local, offline Zero-Shot Voice Cloning API server and Web UI powered by **Qwen3-TTS 1.7B Base Q4_K_M**.
+**PureVision Luna-TTS** is a lightweight, 100% local, offline Zero-Shot Voice Cloning API server and Web UI powered by **Qwen3-TTS 1.7B Base Q4_K_M**, developed by **PureVision** ([www.pvsdesign.com](https://www.pvsdesign.com)).
 
 It is designed for real-time AI agents (e.g., Hermes Agent, Telegram bots, local assistants) requiring instant, natural, zero-shot voice synthesis **without GPU VRAM usage or cloud service dependencies**.
 
