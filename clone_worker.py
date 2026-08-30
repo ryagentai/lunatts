@@ -73,10 +73,11 @@ def main():
     wav_bytes = wav_buf.getvalue()
 
     out_ext = os.path.splitext(out_mp3_path)[1].lower()
+    silence_filter = "silenceremove=stop_periods=-1:stop_duration=1.0:stop_threshold=-35dB"
     if out_ext in {".ogg", ".opus"}:
-        cmd = ["ffmpeg", "-y", "-i", "pipe:0", "-c:a", "libopus", "-b:a", "24k", "-ar", "48000", out_mp3_path]
+        cmd = ["ffmpeg", "-y", "-i", "pipe:0", "-af", silence_filter, "-c:a", "libopus", "-b:a", "24k", "-ar", "48000", out_mp3_path]
     else:
-        cmd = ["ffmpeg", "-y", "-i", "pipe:0", "-f", "mp3", "-ac", "1", "-ar", "24000", "-b:a", "64k", out_mp3_path]
+        cmd = ["ffmpeg", "-y", "-i", "pipe:0", "-af", silence_filter, "-f", "mp3", "-ac", "1", "-ar", "24000", "-b:a", "64k", out_mp3_path]
 
     subprocess.run(
         cmd,
